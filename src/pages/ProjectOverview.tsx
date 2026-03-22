@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
-import { db } from '../firebase';
-import { doc, getDoc, collection, query, where, orderBy, limit, onSnapshot } from 'firebase/firestore';
+import { supabase } from '../lib/supabase';
 import { motion } from 'motion/react';
 import { 
   Users, 
@@ -25,39 +24,106 @@ export default function ProjectOverview() {
     files: 0,
     notes: 0
   });
-  const [recentActivity, setRecentActivity] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     if (!projectId) return;
 
-    const projectRef = doc(db, 'projects', projectId);
-    const unsubscribeProject = onSnapshot(projectRef, (doc) => {
-      if (doc.exists()) {
-        setProject({ id: doc.id, ...doc.data() });
-      }
-      setLoading(false);
-    });
+    fetchProjectData();
 
-    // Fetch stats
-    const bugsQuery = query(collection(db, 'bugs'), where('projectId', '==', projectId));
-    const requestsQuery = query(collection(db, 'change_requests'), where('projectId', '==', projectId));
-    const filesQuery = query(collection(db, 'files'), where('projectId', '==', projectId));
-    const notesQuery = query(collection(db, 'notes'), where('projectId', '==', projectId));
+    const projectChannel = supabase
+      .channel(`project_overview_${projectId}`)
+      .on('postgres_changes', { 
+        event: '*', 
+        schema: 'public', 
+        table: 'projects',
+        filter: `id=eq.${projectId}`
+      }, () => {
+        fetchProjectData();
+      })
+      .subscribe();
 
-    const unsubBugs = onSnapshot(bugsQuery, (snap) => setStats(prev => ({ ...prev, bugs: snap.size })));
-    const unsubRequests = onSnapshot(requestsQuery, (snap) => setStats(prev => ({ ...prev, requests: snap.size })));
-    const unsubFiles = onSnapshot(filesQuery, (snap) => setStats(prev => ({ ...prev, files: snap.size })));
-    const unsubNotes = onSnapshot(notesQuery, (snap) => setStats(prev => ({ ...prev, notes: snap.size })));
+    const bugsChannel = supabase
+      .channel(`bugs_overview_${projectId}`)
+      .on('postgres_changes', { 
+        event: '*', 
+        schema: 'public', 
+        table: 'bugs',
+        filter: `project_id=eq.${projectId}`
+      }, () => {
+        fetchStats();
+      })
+      .subscribe();
+
+    const requestsChannel = supabase
+      .channel(`requests_overview_${projectId}`)
+      .on('postgres_changes', { 
+        event: '*', 
+        schema: 'public', 
+        table: 'change_requests',
+        filter: `project_id=eq.${projectId}`
+      }, () => {
+        fetchStats();
+      })
+      .subscribe();
+
+    const filesChannel = supabase
+      .channel(`files_overview_${projectId}`)
+      .on('postgres_changes', { 
+        event: '*', 
+        schema: 'public', 
+        table: 'files',
+        filter: `project_id=eq.${projectId}`
+      }, () => {
+        fetchStats();
+      })
+      .subscribe();
+
+    const notesChannel = supabase
+      .channel(`notes_overview_${projectId}`)
+      .on('postgres_changes', { 
+        event: '*', 
+        schema: 'public', 
+        table: 'notes',
+        filter: `project_id=eq.${projectId}`
+      }, () => {
+        fetchStats();
+      })
+      .subscribe();
 
     return () => {
-      unsubscribeProject();
-      unsubBugs();
-      unsubRequests();
-      unsubFiles();
-      unsubNotes();
+      supabase.removeChannel(projectChannel);
+      supabase.removeChannel(bugsChannel);
+      supabase.removeChannel(requestsChannel);
+      supabase.removeChannel(filesChannel);
+      supabase.removeChannel(notesChannel);
     };
   }, [projectId]);
+
+  const fetchProjectData = async () => {
+    if (!projectId) return;
+    const { data } = await supabase.from('projects').select('*').eq('id', projectId).single();
+    if (data) setProject(data);
+    setLoading(false);
+    fetchStats();
+  };
+
+  const fetchStats = async () => {
+    if (!projectId) return;
+    const [bugsRes, requestsRes, filesRes, notesRes] = await Promise.all([
+      supabase.from('bugs').select('*', { count: 'exact', head: true }).eq('project_id', projectId),
+      supabase.from('change_requests').select('*', { count: 'exact', head: true }).eq('project_id', projectId),
+      supabase.from('files').select('*', { count: 'exact', head: true }).eq('project_id', projectId),
+      supabase.from('notes').select('*', { count: 'exact', head: true }).eq('project_id', projectId)
+    ]);
+
+    setStats({
+      bugs: bugsRes.count || 0,
+      requests: requestsRes.count || 0,
+      files: filesRes.count || 0,
+      notes: notesRes.count || 0
+    });
+  };
 
   if (loading) return null;
 
@@ -81,11 +147,11 @@ export default function ProjectOverview() {
             <div className="mt-6 flex flex-wrap gap-4">
               <div className="flex items-center gap-2 text-xs text-[var(--dark-grey)] bg-white/5 px-3 py-1.5 rounded-full">
                 <Calendar size={14} />
-                Created {project?.createdAt ? formatDistanceToNow(project.createdAt.toDate(), { addSuffix: true }) : 'Recently'}
+                Created {project?.created_at ? formatDistanceToNow(new Date(project.created_at), { addSuffix: true }) : 'Recently'}
               </div>
               <div className="flex items-center gap-2 text-xs text-[var(--dark-grey)] bg-white/5 px-3 py-1.5 rounded-full">
                 <Clock size={14} />
-                Last updated {project?.updatedAt ? formatDistanceToNow(project.updatedAt.toDate(), { addSuffix: true }) : 'Recently'}
+                Last updated {project?.updated_at ? formatDistanceToNow(new Date(project.updated_at), { addSuffix: true }) : 'Recently'}
               </div>
               <div className="flex items-center gap-2 text-xs text-emerald-500 bg-emerald-500/10 px-3 py-1.5 rounded-full">
                 <Shield size={14} />

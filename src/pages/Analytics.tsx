@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react';
-import { db } from '../firebase';
-import { collection, query, getDocs, orderBy, limit } from 'firebase/firestore';
+import { supabase } from '../lib/supabase';
 import { motion } from 'motion/react';
 import { 
   BarChart, 
@@ -43,17 +42,19 @@ export default function Analytics() {
 
   useEffect(() => {
     const fetchStats = async () => {
-      const projectsSnap = await getDocs(collection(db, 'projects'));
-      const bugsSnap = await getDocs(collection(db, 'bugs'));
-      const requestsSnap = await getDocs(collection(db, 'change_requests'));
+      const [projectsRes, bugsRes, requestsRes] = await Promise.all([
+        supabase.from('projects').select('*', { count: 'exact', head: true }),
+        supabase.from('bugs').select('*'),
+        supabase.from('change_requests').select('*')
+      ]);
 
-      const bugs = bugsSnap.docs.map(d => d.data());
-      const requests = requestsSnap.docs.map(d => d.data());
+      const bugs = bugsRes.data || [];
+      const requests = requestsRes.data || [];
 
       setStats({
-        totalProjects: projectsSnap.size,
-        totalBugs: bugsSnap.size,
-        totalRequests: requestsSnap.size,
+        totalProjects: projectsRes.count || 0,
+        totalBugs: bugs.length,
+        totalRequests: requests.length,
         resolvedBugs: bugs.filter(b => b.status === 'resolved').length,
         completedRequests: requests.filter(r => r.status === 'completed').length
       });

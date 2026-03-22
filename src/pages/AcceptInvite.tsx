@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
-import { db, auth } from '../firebase';
-import { doc, getDoc, updateDoc, setDoc, serverTimestamp } from 'firebase/firestore';
+import { supabase } from '../lib/supabase';
 import { motion } from 'motion/react';
 import { LayoutDashboard, CheckCircle2, AlertCircle, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -21,7 +20,8 @@ export default function AcceptInvite() {
         return;
       }
 
-      if (!auth.currentUser) {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
         // Redirect to login with invite token
         navigate(`/login?invite=${token}`);
         return;
@@ -29,54 +29,70 @@ export default function AcceptInvite() {
 
       try {
         // Find the invite
-        const inviteRef = doc(db, 'project_invites', token);
-        const inviteSnap = await getDoc(inviteRef);
+        const { data: inviteData, error: inviteError } = await supabase
+          .from('project_invites')
+          .select('*')
+          .eq('token', token)
+          .single();
 
-        if (!inviteSnap.exists()) {
+        if (inviteError || !inviteData) {
           setStatus('error');
           setError('Invalid or expired invite token.');
           return;
         }
 
-        const inviteData = inviteSnap.data();
         if (inviteData.accepted) {
           setStatus('error');
           setError('This invite has already been used.');
           return;
         }
 
-        // Add user to project if projectId exists
-        if (inviteData.projectId) {
-          const projectUserRef = doc(db, 'projects', inviteData.projectId, 'users', auth.currentUser.uid);
-          await setDoc(projectUserRef, {
-            userId: auth.currentUser.uid,
-            role: inviteData.role,
-            joinedAt: serverTimestamp()
-          });
+        // Add user to project if project_id exists
+        if (inviteData.project_id) {
+          const { error: projectUserError } = await supabase
+            .from('project_users')
+            .insert([{
+              project_id: inviteData.project_id,
+              user_id: user.id,
+              role: inviteData.role
+            }]);
+          
+          if (projectUserError && projectUserError.code !== '23505') { // Ignore unique constraint violation
+            throw projectUserError;
+          }
         }
 
         // Mark invite as accepted
-        await updateDoc(inviteRef, {
-          accepted: true,
-          acceptedAt: serverTimestamp(),
-          acceptedBy: auth.currentUser.uid
-        });
+        const { error: updateInviteError } = await supabase
+          .from('project_invites')
+          .update({
+            accepted: true,
+            accepted_at: new Date().toISOString(),
+            accepted_by: user.id
+          })
+          .eq('token', token);
+
+        if (updateInviteError) throw updateInviteError;
 
         // Update user profile role if needed
-        const profileRef = doc(db, 'profiles', auth.currentUser.uid);
-        await updateDoc(profileRef, {
-          role: inviteData.role === 'client' ? 'client' : 'developer'
-        });
+        const { error: profileError } = await supabase
+          .from('profiles')
+          .update({
+            role: inviteData.role === 'client' ? 'client' : 'developer'
+          })
+          .eq('id', user.id);
+
+        if (profileError) throw profileError;
 
         setStatus('success');
         toast.success('Invite accepted! Welcome to the loop.');
         
         // Redirect after 3 seconds
         setTimeout(() => {
-          if (inviteData.role === 'client' && inviteData.projectId) {
-            navigate(`/portal/${inviteData.projectId}`);
-          } else if (inviteData.projectId) {
-            navigate(`/dashboard/projects/${inviteData.projectId}`);
+          if (inviteData.role === 'client' && inviteData.project_id) {
+            navigate(`/portal/${inviteData.project_id}`);
+          } else if (inviteData.project_id) {
+            navigate(`/dashboard/projects/${inviteData.project_id}`);
           } else {
             navigate('/dashboard');
           }

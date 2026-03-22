@@ -1,8 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
-import { db, storage, auth } from '../firebase';
-import { collection, query, onSnapshot, addDoc, serverTimestamp, deleteDoc, doc } from 'firebase/firestore';
-import { ref, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
+import { supabase } from '../lib/supabase';
 import { useDropzone } from 'react-dropzone';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -30,35 +28,75 @@ export default function Files() {
   useEffect(() => {
     if (!projectId) return;
 
-    const q = query(collection(db, 'projects', projectId, 'files'));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const filesData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setFiles(filesData);
-      setLoading(false);
-    });
+    fetchFiles();
 
-    return () => unsubscribe();
+    const channel = supabase
+      .channel(`files_${projectId}`)
+      .on('postgres_changes', { 
+        event: '*', 
+        schema: 'public', 
+        table: 'files',
+        filter: `project_id=eq.${projectId}`
+      }, () => {
+        fetchFiles();
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, [projectId]);
 
+  const fetchFiles = async () => {
+    if (!projectId) return;
+    const { data, error } = await supabase
+      .from('files')
+      .select('*')
+      .eq('project_id', projectId)
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      toast.error('Failed to fetch files');
+    } else {
+      setFiles(data || []);
+    }
+    setLoading(false);
+  };
+
   const onDrop = useCallback(async (acceptedFiles: File[]) => {
-    if (!projectId || !auth.currentUser) return;
+    if (!projectId) return;
     
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+
     setUploading(true);
     for (const file of acceptedFiles) {
       try {
-        const fileRef = ref(storage, `projects/${projectId}/files/${Date.now()}_${file.name}`);
-        const snapshot = await uploadBytes(fileRef, file);
-        const downloadURL = await getDownloadURL(snapshot.ref);
+        const filePath = `${projectId}/${Date.now()}_${file.name}`;
+        const { error: uploadError } = await supabase.storage
+          .from('project-files')
+          .upload(filePath, file);
 
-        await addDoc(collection(db, 'projects', projectId, 'files'), {
-          name: file.name,
-          size: file.size,
-          type: file.type,
-          url: downloadURL,
-          path: fileRef.fullPath,
-          uploadedBy: auth.currentUser.uid,
-          createdAt: serverTimestamp(),
-        });
+        if (uploadError) throw uploadError;
+
+        const { data: { publicUrl } } = supabase.storage
+          .from('project-files')
+          .getPublicUrl(filePath);
+
+        const { error: dbError } = await supabase
+          .from('files')
+          .insert([{
+            name: file.name,
+            size: file.size,
+            type: file.type,
+            url: publicUrl,
+            path: filePath,
+            project_id: projectId,
+            uploaded_by: user.id
+          }]);
+
+        if (dbError) throw dbError;
+
         toast.success(`Uploaded ${file.name}`);
       } catch (error) {
         console.error(error);
@@ -71,11 +109,20 @@ export default function Files() {
   const { getRootProps, getInputProps, isDragActive } = useDropzone({ onDrop });
 
   const handleDelete = async (file: any) => {
-    if (!projectId) return;
     try {
-      const fileRef = ref(storage, file.path);
-      await deleteObject(fileRef);
-      await deleteDoc(doc(db, 'projects', projectId, 'files', file.id));
+      const { error: storageError } = await supabase.storage
+        .from('project-files')
+        .remove([file.path]);
+
+      if (storageError) throw storageError;
+
+      const { error: dbError } = await supabase
+        .from('files')
+        .delete()
+        .eq('id', file.id);
+
+      if (dbError) throw dbError;
+
       toast.success('File deleted');
     } catch (error) {
       toast.error('Failed to delete file');
@@ -165,7 +212,7 @@ export default function Files() {
               <p className="font-medium text-white truncate text-sm">{file.name}</p>
               <div className="flex items-center justify-between text-[10px] text-[var(--dark-grey)]">
                 <span>{(file.size / (1024 * 1024)).toFixed(2)} MB</span>
-                <span>{file.createdAt ? formatDate(file.createdAt.toDate()) : 'Recently'}</span>
+                <span>{file.created_at ? formatDate(new Date(file.created_at)) : 'Recently'}</span>
               </div>
             </div>
           </div>

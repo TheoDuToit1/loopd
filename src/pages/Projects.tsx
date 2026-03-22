@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react';
-import { db, auth } from '../firebase';
-import { collection, query, where, onSnapshot, addDoc, serverTimestamp } from 'firebase/firestore';
+import { supabase } from '../lib/supabase';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Plus, 
@@ -24,28 +23,55 @@ export default function Projects() {
   const [newProject, setNewProject] = useState({ name: '', description: '', status: 'planning' });
 
   useEffect(() => {
-    if (!auth.currentUser) return;
+    fetchProjects();
 
-    const q = query(collection(db, 'projects'), where('ownerId', '==', auth.currentUser.uid));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const projectsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setProjects(projectsData);
-      setLoading(false);
-    });
+    const channel = supabase
+      .channel('projects_changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'projects' }, () => {
+        fetchProjects();
+      })
+      .subscribe();
 
-    return () => unsubscribe();
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, []);
+
+  const fetchProjects = async () => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+
+    const { data, error } = await supabase
+      .from('projects')
+      .select('*')
+      .eq('owner_id', user.id)
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      toast.error('Failed to fetch projects');
+    } else {
+      setProjects(data || []);
+    }
+    setLoading(false);
+  };
 
   const handleCreateProject = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!auth.currentUser) return;
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
 
     try {
-      await addDoc(collection(db, 'projects'), {
-        ...newProject,
-        ownerId: auth.currentUser.uid,
-        createdAt: serverTimestamp(),
-      });
+      const { error } = await supabase
+        .from('projects')
+        .insert([{
+          name: newProject.name,
+          description: newProject.description,
+          status: newProject.status,
+          owner_id: user.id
+        }]);
+
+      if (error) throw error;
+
       setShowNewModal(false);
       setNewProject({ name: '', description: '', status: 'planning' });
       toast.success('Project created successfully');
@@ -226,7 +252,7 @@ function ProjectCard({ project }: { project: any }) {
             </div>
             <div className="flex items-center gap-1">
               <Calendar size={14} />
-              <span>{project.createdAt ? formatDate(project.createdAt.toDate()) : 'Recently'}</span>
+              <span>{project.created_at ? formatDate(new Date(project.created_at)) : 'Recently'}</span>
             </div>
           </div>
           <ChevronRight size={18} className="text-[var(--dark-grey)] group-hover:text-white transition-colors" />

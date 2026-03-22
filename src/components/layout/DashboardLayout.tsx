@@ -1,14 +1,9 @@
 import { useState } from 'react';
 import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom';
-import { User, signOut } from 'firebase/auth';
-import { auth } from '../../firebase';
+import { supabase } from '../../lib/supabase';
 import { motion } from 'motion/react';
 import { 
   LayoutDashboard, 
-  Bug, 
-  GitPullRequest, 
-  Lock, 
-  FileText, 
   Settings, 
   LogOut, 
   ChevronRight,
@@ -25,7 +20,7 @@ import { cn } from '../../lib/utils';
 import { toast } from 'sonner';
 import { useTheme, hexToRgb, darkenColor } from '../../contexts/ThemeContext';
 
-export default function DashboardLayout({ user }: { user: User }) {
+export default function DashboardLayout({ user }: { user: any }) {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const location = useLocation();
   const navigate = useNavigate();
@@ -33,7 +28,7 @@ export default function DashboardLayout({ user }: { user: User }) {
 
   const handleLogout = async () => {
     try {
-      await signOut(auth);
+      await supabase.auth.signOut();
       toast.success('Logged out successfully');
       navigate('/login');
     } catch (error) {
@@ -98,11 +93,11 @@ export default function DashboardLayout({ user }: { user: User }) {
         <div className="p-4 border-t border-white/5 space-y-4">
           <div className={cn("flex items-center gap-3 p-2 rounded-xl", sidebarOpen && "bg-white/5")}>
             <div className="w-10 h-10 rounded-full bg-[var(--accent-color)] flex items-center justify-center text-white font-bold shrink-0">
-              {user.displayName?.[0] || 'U'}
+              {user.user_metadata?.display_name?.[0] || user.email?.[0] || 'U'}
             </div>
             {sidebarOpen && (
               <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium text-white truncate">{user.displayName}</p>
+                <p className="text-sm font-medium text-white truncate">{user.user_metadata?.display_name || 'User'}</p>
                 <p className="text-xs text-[var(--dark-grey)] truncate">{user.email}</p>
               </div>
             )}

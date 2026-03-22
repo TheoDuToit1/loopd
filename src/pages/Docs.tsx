@@ -1,7 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useParams } from 'react-router-dom';
-import { db, auth } from '../firebase';
-import { collection, query, onSnapshot, addDoc, serverTimestamp, updateDoc, doc, deleteDoc } from 'firebase/firestore';
+import { supabase } from '../lib/supabase';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Plus, 
@@ -26,36 +25,68 @@ export default function Docs() {
   const [selectedDoc, setSelectedDoc] = useState<any>(null);
   const [saving, setSaving] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
+  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     if (!projectId) return;
 
-    const q = query(collection(db, 'projects', projectId, 'docs'));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const docsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setDocs(docsData);
-      setLoading(false);
-      
-      if (!selectedDoc && docsData.length > 0) {
-        setSelectedDoc(docsData[0]);
-      }
-    });
+    fetchDocs();
 
-    return () => unsubscribe();
+    const channel = supabase
+      .channel(`docs_${projectId}`)
+      .on('postgres_changes', { 
+        event: '*', 
+        schema: 'public', 
+        table: 'docs',
+        filter: `project_id=eq.${projectId}`
+      }, () => {
+        fetchDocs();
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, [projectId]);
 
+  const fetchDocs = async () => {
+    if (!projectId) return;
+    const { data, error } = await supabase
+      .from('docs')
+      .select('*')
+      .eq('project_id', projectId)
+      .order('updated_at', { ascending: false });
+
+    if (error) {
+      toast.error('Failed to fetch docs');
+    } else {
+      setDocs(data || []);
+      if (!selectedDoc && data && data.length > 0) {
+        setSelectedDoc(data[0]);
+      }
+    }
+    setLoading(false);
+  };
+
   const handleCreateDoc = async () => {
-    if (!projectId || !auth.currentUser) return;
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!projectId || !user) return;
 
     try {
-      await addDoc(collection(db, 'projects', projectId, 'docs'), {
-        title: 'New Documentation',
-        content: '# Documentation\nStart documenting your project...',
-        status: 'draft',
-        authorId: auth.currentUser.uid,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      });
+      const { data, error } = await supabase
+        .from('docs')
+        .insert([{
+          title: 'New Documentation',
+          content: '# Documentation\nStart documenting your project...',
+          status: 'draft',
+          project_id: projectId,
+          author_id: user.id
+        }])
+        .select()
+        .single();
+
+      if (error) throw error;
+      setSelectedDoc(data);
       toast.success('Doc created');
     } catch (error) {
       toast.error('Failed to create doc');
@@ -64,23 +95,40 @@ export default function Docs() {
 
   const handleUpdateDoc = async (id: string, updates: any) => {
     if (!projectId) return;
-    setSaving(true);
-    try {
-      await updateDoc(doc(db, 'projects', projectId, 'docs', id), {
-        ...updates,
-        updatedAt: serverTimestamp(),
-      });
-      setSaving(false);
-    } catch (error) {
-      toast.error('Failed to save doc');
-      setSaving(false);
+    
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current);
     }
+
+    setSaving(true);
+    
+    saveTimeoutRef.current = setTimeout(async () => {
+      try {
+        const { error } = await supabase
+          .from('docs')
+          .update({
+            ...updates,
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', id);
+
+        if (error) throw error;
+        setSaving(false);
+      } catch (error) {
+        toast.error('Failed to save doc');
+        setSaving(false);
+      }
+    }, 1000);
   };
 
   const handleDeleteDoc = async (id: string) => {
-    if (!projectId) return;
     try {
-      await deleteDoc(doc(db, 'projects', projectId, 'docs', id));
+      const { error } = await supabase
+        .from('docs')
+        .delete()
+        .eq('id', id);
+
+      if (error) throw error;
       if (selectedDoc?.id === id) setSelectedDoc(null);
       toast.success('Doc deleted');
     } catch (error) {
@@ -141,7 +189,7 @@ export default function Docs() {
                 </span>
               </div>
               <p className="text-xs text-[var(--dark-grey)] line-clamp-1">{docItem.content.replace(/[#*`]/g, '')}</p>
-              <p className="text-[10px] text-[var(--dark-grey)] mt-2">{docItem.updatedAt ? formatDate(docItem.updatedAt.toDate()) : 'Recently'}</p>
+              <p className="text-[10px] text-[var(--dark-grey)] mt-2">{docItem.updated_at ? formatDate(new Date(docItem.updated_at)) : 'Recently'}</p>
             </button>
           ))}
           {filteredDocs.length === 0 && !loading && (

@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
-import { db, auth } from '../firebase';
-import { collection, query, onSnapshot, addDoc, serverTimestamp, updateDoc, doc } from 'firebase/firestore';
+import { supabase } from '../lib/supabase';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Plus, 
@@ -26,27 +25,58 @@ export default function ChangeRequests() {
   useEffect(() => {
     if (!projectId) return;
 
-    const q = query(collection(db, 'projects', projectId, 'change_requests'));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const requestsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setRequests(requestsData);
-      setLoading(false);
-    });
+    fetchRequests();
 
-    return () => unsubscribe();
+    const channel = supabase
+      .channel(`change_requests_${projectId}`)
+      .on('postgres_changes', { 
+        event: '*', 
+        schema: 'public', 
+        table: 'change_requests',
+        filter: `project_id=eq.${projectId}`
+      }, () => {
+        fetchRequests();
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, [projectId]);
+
+  const fetchRequests = async () => {
+    if (!projectId) return;
+    const { data, error } = await supabase
+      .from('change_requests')
+      .select('*')
+      .eq('project_id', projectId)
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      toast.error('Failed to fetch requests');
+    } else {
+      setRequests(data || []);
+    }
+    setLoading(false);
+  };
 
   const handleCreateRequest = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!auth.currentUser || !projectId) return;
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user || !projectId) return;
 
     try {
-      await addDoc(collection(db, 'projects', projectId, 'change_requests'), {
-        ...newRequest,
-        status: 'submitted',
-        clientId: auth.currentUser.uid,
-        createdAt: serverTimestamp(),
-      });
+      const { error } = await supabase
+        .from('change_requests')
+        .insert([{
+          ...newRequest,
+          status: 'submitted',
+          project_id: projectId,
+          client_id: user.id
+        }]);
+
+      if (error) throw error;
+
       setShowNewModal(false);
       setNewRequest({ title: '', description: '', priority: 'medium' });
       toast.success('Request submitted successfully');
@@ -56,11 +86,13 @@ export default function ChangeRequests() {
   };
 
   const handleUpdateStatus = async (requestId: string, newStatus: string) => {
-    if (!projectId) return;
     try {
-      await updateDoc(doc(db, 'projects', projectId, 'change_requests', requestId), {
-        status: newStatus
-      });
+      const { error } = await supabase
+        .from('change_requests')
+        .update({ status: newStatus })
+        .eq('id', requestId);
+
+      if (error) throw error;
       toast.success('Status updated');
     } catch (error) {
       toast.error('Failed to update status');

@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
-import { db } from '../firebase';
-import { collection, query, where, orderBy, onSnapshot } from 'firebase/firestore';
+import { supabase } from '../lib/supabase';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   FileText, 
@@ -24,20 +23,37 @@ export default function ClientDocs() {
   useEffect(() => {
     if (!projectId) return;
 
-    const q = query(
-      collection(db, 'docs'),
-      where('projectId', '==', projectId),
-      where('status', '==', 'published'),
-      orderBy('updatedAt', 'desc')
-    );
+    fetchDocs();
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      setDocs(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
-      setLoading(false);
-    });
+    const channel = supabase
+      .channel(`docs_${projectId}`)
+      .on('postgres_changes', { 
+        event: '*', 
+        schema: 'public', 
+        table: 'docs',
+        filter: `project_id=eq.${projectId}`
+      }, () => {
+        fetchDocs();
+      })
+      .subscribe();
 
-    return () => unsubscribe();
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, [projectId]);
+
+  const fetchDocs = async () => {
+    if (!projectId) return;
+    const { data } = await supabase
+      .from('docs')
+      .select('*')
+      .eq('project_id', projectId)
+      .eq('status', 'published')
+      .order('updated_at', { ascending: false });
+    
+    if (data) setDocs(data);
+    setLoading(false);
+  };
 
   const filteredDocs = docs.filter(d => 
     d.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -60,7 +76,7 @@ export default function ClientDocs() {
           <div className="flex items-center gap-4 text-xs text-[var(--dark-grey)]">
             <div className="flex items-center gap-1.5">
               <Clock size={14} />
-              Last updated {selectedDoc.updatedAt ? formatDistanceToNow(selectedDoc.updatedAt.toDate(), { addSuffix: true }) : 'Recently'}
+              Last updated {selectedDoc.updated_at ? formatDistanceToNow(new Date(selectedDoc.updated_at), { addSuffix: true }) : 'Recently'}
             </div>
             <div className="flex items-center gap-1.5">
               <BookOpen size={14} />
@@ -120,7 +136,7 @@ export default function ClientDocs() {
               </p>
               <div className="flex items-center gap-1.5 text-[10px] text-[var(--dark-grey)] pt-2 uppercase tracking-wider font-bold">
                 <Clock size={12} />
-                {docItem.updatedAt ? formatDistanceToNow(docItem.updatedAt.toDate(), { addSuffix: true }) : 'Recently'}
+                {docItem.updated_at ? formatDistanceToNow(new Date(docItem.updated_at), { addSuffix: true }) : 'Recently'}
               </div>
             </div>
             <ChevronRight size={20} className="text-[var(--dark-grey)] group-hover:text-white transition-all self-center" />

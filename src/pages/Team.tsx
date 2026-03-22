@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react';
-import { db } from '../firebase';
-import { collection, query, getDocs, orderBy, onSnapshot, doc, setDoc, serverTimestamp } from 'firebase/firestore';
+import { supabase } from '../lib/supabase';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Users, 
@@ -31,28 +30,55 @@ export default function Team() {
   const [inviteLink, setInviteLink] = useState('');
 
   useEffect(() => {
-    const q = query(collection(db, 'profiles'), orderBy('displayName', 'asc'));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      setMembers(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
-      setLoading(false);
-    });
-    return () => unsubscribe();
+    fetchMembers();
+
+    const channel = supabase
+      .channel('public:profiles')
+      .on('postgres_changes', { 
+        event: '*', 
+        schema: 'public', 
+        table: 'profiles' 
+      }, () => {
+        fetchMembers();
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, []);
+
+  const fetchMembers = async () => {
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('*')
+      .order('full_name', { ascending: true });
+
+    if (error) {
+      toast.error('Failed to fetch team members');
+    } else {
+      setMembers(data || []);
+    }
+    setLoading(false);
+  };
 
   const handleInvite = async (e: React.FormEvent) => {
     e.preventDefault();
     setInviting(true);
     try {
       const token = Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
-      const inviteRef = doc(db, 'project_invites', token);
       
-      await setDoc(inviteRef, {
-        role: inviteRole,
-        email: inviteEmail,
-        accepted: false,
-        createdAt: serverTimestamp(),
-        type: 'organization' // General invite to the organization
-      });
+      const { error } = await supabase
+        .from('project_invites')
+        .insert([{
+          token,
+          role: inviteRole,
+          email: inviteEmail,
+          accepted: false,
+          type: 'organization'
+        }]);
+
+      if (error) throw error;
 
       const link = `${window.location.origin}/accept-invite?token=${token}`;
       setInviteLink(link);
@@ -71,7 +97,7 @@ export default function Team() {
   };
 
   const filteredMembers = members.filter(m => 
-    m.displayName?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    m.full_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
     m.email?.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
@@ -130,11 +156,11 @@ export default function Team() {
 
             <div className="flex items-center gap-4 mb-6">
               <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-[#4F46E5] to-[#7C3AED] flex items-center justify-center text-2xl font-bold text-white shadow-xl">
-                {member.displayName.charAt(0)}
+                {member.full_name?.charAt(0) || 'U'}
               </div>
               <div>
                 <h3 className="text-lg font-bold text-white group-hover:text-[#4F46E5] transition-colors">
-                  {member.displayName}
+                  {member.full_name}
                 </h3>
                 <div className="flex items-center gap-1.5 text-xs text-[var(--dark-grey)]">
                   <Mail size={12} />

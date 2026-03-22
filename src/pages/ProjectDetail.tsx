@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useParams, Outlet, NavLink, Link } from 'react-router-dom';
-import { db } from '../firebase';
-import { doc, onSnapshot } from 'firebase/firestore';
+import { supabase } from '../lib/supabase';
 import { motion } from 'motion/react';
 import { 
   LayoutDashboard, 
@@ -26,17 +25,40 @@ export default function ProjectDetail() {
   useEffect(() => {
     if (!projectId) return;
 
-    const unsubscribe = onSnapshot(doc(db, 'projects', projectId), (doc) => {
-      if (doc.exists()) {
-        setProject({ id: doc.id, ...doc.data() });
-      } else {
-        toast.error('Project not found');
-      }
-      setLoading(false);
-    });
+    fetchProject();
 
-    return () => unsubscribe();
+    const channel = supabase
+      .channel(`project_${projectId}`)
+      .on('postgres_changes', { 
+        event: '*', 
+        schema: 'public', 
+        table: 'projects',
+        filter: `id=eq.${projectId}`
+      }, () => {
+        fetchProject();
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, [projectId]);
+
+  const fetchProject = async () => {
+    if (!projectId) return;
+    const { data, error } = await supabase
+      .from('projects')
+      .select('*')
+      .eq('id', projectId)
+      .single();
+
+    if (error) {
+      toast.error('Project not found');
+    } else {
+      setProject(data);
+    }
+    setLoading(false);
+  };
 
   const tabs = [
     { id: 'overview', label: 'Overview', icon: <LayoutDashboard size={18} /> },

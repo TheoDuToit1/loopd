@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
-import { db, auth } from '../firebase';
-import { collection, query, where, onSnapshot, addDoc, serverTimestamp, updateDoc, doc } from 'firebase/firestore';
+import { supabase } from '../lib/supabase';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Plus, 
@@ -27,26 +26,57 @@ export default function BugTracker() {
   useEffect(() => {
     if (!projectId) return;
 
-    const q = query(collection(db, 'projects', projectId, 'bugs'));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const bugsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setBugs(bugsData);
-      setLoading(false);
-    });
+    fetchBugs();
 
-    return () => unsubscribe();
+    const channel = supabase
+      .channel(`bugs_${projectId}`)
+      .on('postgres_changes', { 
+        event: '*', 
+        schema: 'public', 
+        table: 'bugs',
+        filter: `project_id=eq.${projectId}`
+      }, () => {
+        fetchBugs();
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, [projectId]);
+
+  const fetchBugs = async () => {
+    if (!projectId) return;
+    const { data, error } = await supabase
+      .from('bugs')
+      .select('*')
+      .eq('project_id', projectId)
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      toast.error('Failed to fetch bugs');
+    } else {
+      setBugs(data || []);
+    }
+    setLoading(false);
+  };
 
   const handleCreateBug = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!auth.currentUser || !projectId) return;
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user || !projectId) return;
 
     try {
-      await addDoc(collection(db, 'projects', projectId, 'bugs'), {
-        ...newBug,
-        reporterId: auth.currentUser.uid,
-        createdAt: serverTimestamp(),
-      });
+      const { error } = await supabase
+        .from('bugs')
+        .insert([{
+          ...newBug,
+          project_id: projectId,
+          reporter_id: user.id
+        }]);
+
+      if (error) throw error;
+
       setShowNewModal(false);
       setNewBug({ title: '', description: '', severity: 'medium', status: 'open' });
       toast.success('Bug reported successfully');
@@ -56,11 +86,13 @@ export default function BugTracker() {
   };
 
   const handleUpdateStatus = async (bugId: string, newStatus: string) => {
-    if (!projectId) return;
     try {
-      await updateDoc(doc(db, 'projects', projectId, 'bugs', bugId), {
-        status: newStatus
-      });
+      const { error } = await supabase
+        .from('bugs')
+        .update({ status: newStatus })
+        .eq('id', bugId);
+
+      if (error) throw error;
       toast.success('Status updated');
     } catch (error) {
       toast.error('Failed to update status');
@@ -142,7 +174,7 @@ export default function BugTracker() {
                   </select>
                 </td>
                 <td className="px-6 py-4 text-sm text-[var(--dark-grey)]">
-                  {bug.createdAt ? formatDate(bug.createdAt.toDate()) : 'Recently'}
+                  {bug.created_at ? formatDate(new Date(bug.created_at)) : 'Recently'}
                 </td>
                 <td className="px-6 py-4 text-right">
                   <button className="text-[var(--dark-grey)] hover:text-white">

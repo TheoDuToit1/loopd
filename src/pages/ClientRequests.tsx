@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
-import { db } from '../firebase';
-import { collection, query, where, orderBy, onSnapshot, addDoc, serverTimestamp } from 'firebase/firestore';
+import { supabase } from '../lib/supabase';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   GitPullRequest, 
@@ -32,32 +31,51 @@ export default function ClientRequests() {
   useEffect(() => {
     if (!projectId) return;
 
-    const q = query(
-      collection(db, 'change_requests'),
-      where('projectId', '==', projectId),
-      orderBy('createdAt', 'desc')
-    );
+    fetchRequests();
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      setRequests(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
-      setLoading(false);
-    });
+    const channel = supabase
+      .channel(`requests_${projectId}`)
+      .on('postgres_changes', { 
+        event: '*', 
+        schema: 'public', 
+        table: 'change_requests',
+        filter: `project_id=eq.${projectId}`
+      }, () => {
+        fetchRequests();
+      })
+      .subscribe();
 
-    return () => unsubscribe();
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, [projectId]);
+
+  const fetchRequests = async () => {
+    if (!projectId) return;
+    const { data } = await supabase
+      .from('change_requests')
+      .select('*')
+      .eq('project_id', projectId)
+      .order('created_at', { ascending: false });
+    
+    if (data) setRequests(data);
+    setLoading(false);
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!projectId) return;
 
     try {
-      await addDoc(collection(db, 'change_requests'), {
-        ...newRequest,
-        projectId,
-        status: 'submitted',
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp()
-      });
+      const { error } = await supabase
+        .from('change_requests')
+        .insert([{
+          ...newRequest,
+          project_id: projectId,
+          status: 'submitted'
+        }]);
+
+      if (error) throw error;
 
       toast.success('Change request submitted successfully');
       setShowAddModal(false);
@@ -139,7 +157,7 @@ export default function ClientRequests() {
                 <div className="flex items-center gap-4 pt-2">
                   <div className="flex items-center gap-1.5 text-xs text-[var(--dark-grey)]">
                     <Clock size={14} />
-                    {request.createdAt ? formatDistanceToNow(request.createdAt.toDate(), { addSuffix: true }) : 'Recently'}
+                    {request.created_at ? formatDistanceToNow(new Date(request.created_at), { addSuffix: true }) : 'Recently'}
                   </div>
                   <div className="flex items-center gap-1.5 text-xs text-[var(--dark-grey)]">
                     <MessageSquare size={14} />

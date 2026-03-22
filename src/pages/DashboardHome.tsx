@@ -1,4 +1,3 @@
-import { User } from 'firebase/auth';
 import { motion } from 'motion/react';
 import { 
   FileText, 
@@ -16,12 +15,12 @@ import {
 import { cn } from '../lib/utils';
 import { Link } from 'react-router-dom';
 
-export default function DashboardHome({ user }: { user: User }) {
+export default function DashboardHome({ user }: { user: any }) {
   return (
     <div className="flex-1 overflow-y-auto p-8 space-y-8">
       <header className="flex items-center justify-between mb-8">
         <div>
-          <h1 className="text-3xl font-bold text-white tracking-tight">Welcome back, {user.displayName?.split(' ')[0]}!</h1>
+          <h1 className="text-3xl font-bold text-white tracking-tight">Welcome back, {user.user_metadata?.display_name?.split(' ')[0] || 'User'}!</h1>
           <p className="text-[var(--dark-grey)]">Here's what's happening in your loop today.</p>
         </div>
         <Link to="/dashboard/projects" className="flex items-center gap-2 px-4 py-2 bg-[#4F46E5] text-white rounded-lg font-medium hover:bg-[#4338CA] transition-all">

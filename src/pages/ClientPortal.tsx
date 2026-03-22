@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { db } from '../firebase';
-import { doc, onSnapshot, query, collection, where } from 'firebase/firestore';
+import { supabase } from '../lib/supabase';
 import { motion } from 'motion/react';
 import { 
   FileText, 
@@ -24,27 +23,66 @@ export default function ClientPortal() {
   useEffect(() => {
     if (!projectId) return;
 
-    const unsubProject = onSnapshot(doc(db, 'projects', projectId), (doc) => {
-      if (doc.exists()) setProject({ id: doc.id, ...doc.data() });
-    });
+    fetchProjectData();
 
-    const qRequests = query(collection(db, 'projects', projectId, 'change_requests'));
-    const unsubRequests = onSnapshot(qRequests, (snapshot) => {
-      setRequests(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
-    });
+    const projectChannel = supabase
+      .channel(`project_${projectId}`)
+      .on('postgres_changes', { 
+        event: '*', 
+        schema: 'public', 
+        table: 'projects',
+        filter: `id=eq.${projectId}`
+      }, () => {
+        fetchProjectData();
+      })
+      .subscribe();
 
-    const qNotes = query(collection(db, 'projects', projectId, 'notes'), where('visible_to_client', '==', true));
-    const unsubNotes = onSnapshot(qNotes, (snapshot) => {
-      setNotes(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
-      setLoading(false);
-    });
+    const requestsChannel = supabase
+      .channel(`requests_${projectId}`)
+      .on('postgres_changes', { 
+        event: '*', 
+        schema: 'public', 
+        table: 'change_requests',
+        filter: `project_id=eq.${projectId}`
+      }, () => {
+        fetchProjectData();
+      })
+      .subscribe();
+
+    const notesChannel = supabase
+      .channel(`notes_${projectId}`)
+      .on('postgres_changes', { 
+        event: '*', 
+        schema: 'public', 
+        table: 'notes',
+        filter: `project_id=eq.${projectId}`
+      }, () => {
+        fetchProjectData();
+      })
+      .subscribe();
 
     return () => {
-      unsubProject();
-      unsubRequests();
-      unsubNotes();
+      supabase.removeChannel(projectChannel);
+      supabase.removeChannel(requestsChannel);
+      supabase.removeChannel(notesChannel);
     };
   }, [projectId]);
+
+  const fetchProjectData = async () => {
+    if (!projectId) return;
+
+    const [projectRes, requestsRes, notesRes] = await Promise.all([
+      supabase.from('projects').select('*').eq('id', projectId).single(),
+      supabase.from('change_requests').select('*').eq('project_id', projectId).order('created_at', { ascending: false }),
+      supabase.from('notes').select('*').eq('project_id', projectId).eq('visible_to_client', true).order('updated_at', { ascending: false })
+    ]);
+
+    if (projectRes.data) setProject(projectRes.data);
+    if (requestsRes.data) setRequests(requestsRes.data);
+    if (notesRes.data) setNotes(notesRes.data);
+    
+    setLoading(false);
+  };
 
   if (loading) return null;
   if (!project) return <div className="text-white">Project not found.</div>;
@@ -87,7 +125,7 @@ export default function ClientPortal() {
                     </div>
                     <div>
                       <h4 className="font-bold text-white">{request.title}</h4>
-                      <p className="text-xs text-[var(--dark-grey)]">{formatDate(request.createdAt?.toDate() || new Date())}</p>
+                      <p className="text-xs text-[var(--dark-grey)]">{formatDate(request.created_at ? new Date(request.created_at) : new Date())}</p>
                     </div>
                   </div>
                   <span className={cn(
@@ -119,7 +157,7 @@ export default function ClientPortal() {
                   </div>
                   <p className="text-sm text-[var(--dark-grey)] line-clamp-3">{note.content.replace(/[#*`]/g, '')}</p>
                   <div className="pt-4 border-t border-white/5 flex items-center justify-between text-xs text-[var(--dark-grey)]">
-                    <span>{formatDate(note.updatedAt?.toDate() || new Date())}</span>
+                    <span>{formatDate(note.updated_at ? new Date(note.updated_at) : new Date())}</span>
                     <button className="text-[#4F46E5] hover:underline">Read more</button>
                   </div>
                 </div>

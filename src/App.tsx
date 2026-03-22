@@ -1,9 +1,8 @@
 import { useState, useEffect } from 'react';
-import { auth, db } from './firebase';
-import { onAuthStateChanged, User } from 'firebase/auth';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
-import { BrowserRouter, Routes, Route, Navigate, Link, useParams, useLocation } from 'react-router-dom';
+import { supabase } from './lib/supabase';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { Toaster } from 'sonner';
+import { AlertTriangle } from 'lucide-react';
 
 // Layouts
 import DashboardLayout from './components/layout/DashboardLayout';
@@ -39,34 +38,98 @@ import { ThemeProvider } from './contexts/ThemeContext';
 import CookieConsent from './components/CookieConsent';
 
 export default function App() {
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<any>(null);
   const [profile, setProfile] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [isConfigured, setIsConfigured] = useState(true);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (user) => {
-      if (user) {
-        const profileRef = doc(db, 'profiles', user.uid);
-        const profileSnap = await getDoc(profileRef);
-        
-        if (profileSnap.exists()) {
-          setProfile(profileSnap.data());
+    try {
+      // Get initial session
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (session) {
+          setUser(session.user);
+          fetchProfile(session.user.id);
+        } else {
+          setLoading(false);
         }
-        setUser(user);
-      } else {
-        setUser(null);
-        setProfile(null);
-      }
-      setLoading(false);
-    });
+      }).catch(err => {
+        if (err.message.includes('Missing Supabase environment variables')) {
+          setIsConfigured(false);
+          setLoading(false);
+        }
+      });
 
-    return () => unsubscribe();
+      // Listen for auth changes
+      const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+        if (session) {
+          setUser(session.user);
+          await fetchProfile(session.user.id);
+        } else {
+          setUser(null);
+          setProfile(null);
+          setLoading(false);
+        }
+      });
+
+      return () => subscription.unsubscribe();
+    } catch (err: any) {
+      if (err.message.includes('Missing Supabase environment variables')) {
+        setIsConfigured(false);
+        setLoading(false);
+      } else {
+        console.error('App initialization error:', err);
+        setLoading(false);
+      }
+    }
   }, []);
+
+  const fetchProfile = async (userId: string) => {
+    try {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', userId)
+        .single();
+      
+      if (data) {
+        setProfile(data);
+      }
+    } catch (error) {
+      console.error('Error fetching profile:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   if (loading) {
     return (
       <div className="h-screen w-screen flex items-center justify-center bg-[#060714]">
         <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-[#4F46E5]"></div>
+      </div>
+    );
+  }
+
+  if (!isConfigured) {
+    return (
+      <div className="h-screen w-screen flex items-center justify-center bg-[#060714] p-4 text-center">
+        <div className="max-w-md space-y-6">
+          <div className="w-20 h-20 bg-red-500/10 border border-red-500/20 rounded-3xl flex items-center justify-center mx-auto">
+            <AlertTriangle className="text-red-500" size={40} />
+          </div>
+          <div className="space-y-2">
+            <h1 className="text-2xl font-bold text-white">Configuration Required</h1>
+            <p className="text-[var(--dark-grey)]">
+              Supabase environment variables are missing. Please configure <code className="text-indigo-400">VITE_SUPABASE_URL</code> and <code className="text-indigo-400">VITE_SUPABASE_ANON_KEY</code> in the AI Studio settings.
+            </p>
+          </div>
+          <div className="p-4 bg-white/5 border border-white/10 rounded-2xl text-left text-xs font-mono text-[var(--dark-grey)]">
+            1. Go to Settings menu<br/>
+            2. Add VITE_SUPABASE_URL<br/>
+            3. Add VITE_SUPABASE_ANON_KEY<br/>
+            4. Restart the application
+          </div>
+        </div>
       </div>
     );
   }

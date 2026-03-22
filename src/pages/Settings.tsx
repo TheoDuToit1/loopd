@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react';
-import { auth, db } from '../firebase';
-import { doc, onSnapshot, updateDoc } from 'firebase/firestore';
+import { supabase } from '../lib/supabase';
 import { motion } from 'motion/react';
 import { 
   User, 
@@ -36,22 +35,61 @@ export default function Settings() {
   ];
 
   useEffect(() => {
-    if (!auth.currentUser) return;
+    fetchProfile();
 
-    const unsubscribe = onSnapshot(doc(db, 'profiles', auth.currentUser.uid), (doc) => {
-      if (doc.exists()) {
-        setProfile(doc.data());
-      }
-      setLoading(false);
-    });
+    const setupSubscription = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
 
-    return () => unsubscribe();
+      const channel = supabase
+        .channel(`profile_${user.id}`)
+        .on('postgres_changes', { 
+          event: '*', 
+          schema: 'public', 
+          table: 'profiles',
+          filter: `id=eq.${user.id}`
+        }, () => {
+          fetchProfile();
+        })
+        .subscribe();
+
+      return () => {
+        supabase.removeChannel(channel);
+      };
+    };
+
+    setupSubscription();
   }, []);
 
+  const fetchProfile = async () => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('id', user.id)
+      .single();
+
+    if (error) {
+      toast.error('Failed to fetch profile');
+    } else {
+      setProfile(data);
+    }
+    setLoading(false);
+  };
+
   const handleUpdateProfile = async (updates: any) => {
-    if (!auth.currentUser) return;
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+
     try {
-      await updateDoc(doc(db, 'profiles', auth.currentUser.uid), updates);
+      const { error } = await supabase
+        .from('profiles')
+        .update(updates)
+        .eq('id', user.id);
+
+      if (error) throw error;
       toast.success('Settings updated');
     } catch (error) {
       toast.error('Failed to update settings');
@@ -100,10 +138,10 @@ export default function Settings() {
             <div className="space-y-6">
               <div className="flex items-center gap-6">
                 <div className="w-20 h-20 rounded-full bg-indigo-500 flex items-center justify-center text-3xl font-bold text-white">
-                  {profile?.displayName?.[0] || 'U'}
+                  {profile?.full_name?.[0] || 'U'}
                 </div>
                 <div>
-                  <h3 className="text-xl font-bold text-white">{profile?.displayName}</h3>
+                  <h3 className="text-xl font-bold text-white">{profile?.full_name}</h3>
                   <p className="text-[var(--dark-grey)]">{profile?.email}</p>
                   <button className="mt-2 text-sm text-[var(--accent-color)] hover:underline">Change avatar</button>
                 </div>
@@ -111,11 +149,11 @@ export default function Settings() {
 
               <div className="grid grid-cols-1 gap-4">
                 <div className="space-y-2">
-                  <label className="text-sm font-medium text-[var(--dark-grey)]">Display Name</label>
+                  <label className="text-sm font-medium text-[var(--dark-grey)]">Full Name</label>
                   <input 
                     type="text" 
-                    defaultValue={profile?.displayName}
-                    onBlur={(e) => handleUpdateProfile({ displayName: e.target.value })}
+                    defaultValue={profile?.full_name}
+                    onBlur={(e) => handleUpdateProfile({ full_name: e.target.value })}
                     className="w-full px-4 py-2 bg-[#060714] border border-white/5 rounded-xl text-white focus:outline-none focus:border-[var(--accent-color)] transition-all"
                   />
                 </div>

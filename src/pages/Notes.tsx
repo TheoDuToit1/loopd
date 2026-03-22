@@ -1,7 +1,6 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams } from 'react-router-dom';
-import { db, auth } from '../firebase';
-import { collection, query, onSnapshot, addDoc, serverTimestamp, updateDoc, doc, deleteDoc } from 'firebase/firestore';
+import { supabase } from '../lib/supabase';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Plus, 
@@ -26,36 +25,68 @@ export default function Notes() {
   const [selectedNote, setSelectedNote] = useState<any>(null);
   const [saving, setSaving] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
+  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     if (!projectId) return;
 
-    const q = query(collection(db, 'projects', projectId, 'notes'));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const notesData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setNotes(notesData);
-      setLoading(false);
-      
-      if (!selectedNote && notesData.length > 0) {
-        setSelectedNote(notesData[0]);
-      }
-    });
+    fetchNotes();
 
-    return () => unsubscribe();
+    const channel = supabase
+      .channel(`notes_${projectId}`)
+      .on('postgres_changes', { 
+        event: '*', 
+        schema: 'public', 
+        table: 'notes',
+        filter: `project_id=eq.${projectId}`
+      }, () => {
+        fetchNotes();
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, [projectId]);
 
+  const fetchNotes = async () => {
+    if (!projectId) return;
+    const { data, error } = await supabase
+      .from('notes')
+      .select('*')
+      .eq('project_id', projectId)
+      .order('updated_at', { ascending: false });
+
+    if (error) {
+      toast.error('Failed to fetch notes');
+    } else {
+      setNotes(data || []);
+      if (!selectedNote && data && data.length > 0) {
+        setSelectedNote(data[0]);
+      }
+    }
+    setLoading(false);
+  };
+
   const handleCreateNote = async () => {
-    if (!projectId || !auth.currentUser) return;
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!projectId || !user) return;
 
     try {
-      const docRef = await addDoc(collection(db, 'projects', projectId, 'notes'), {
-        title: 'Untitled Note',
-        content: '# New Note\nStart writing here...',
-        visible_to_client: false,
-        authorId: auth.currentUser.uid,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      });
+      const { data, error } = await supabase
+        .from('notes')
+        .insert([{
+          title: 'Untitled Note',
+          content: '# New Note\nStart writing here...',
+          visible_to_client: false,
+          project_id: projectId,
+          author_id: user.id
+        }])
+        .select()
+        .single();
+
+      if (error) throw error;
+      setSelectedNote(data);
       toast.success('Note created');
     } catch (error) {
       toast.error('Failed to create note');
@@ -64,23 +95,42 @@ export default function Notes() {
 
   const handleUpdateNote = async (id: string, updates: any) => {
     if (!projectId) return;
-    setSaving(true);
-    try {
-      await updateDoc(doc(db, 'projects', projectId, 'notes', id), {
-        ...updates,
-        updatedAt: serverTimestamp(),
-      });
-      setSaving(false);
-    } catch (error) {
-      toast.error('Failed to save note');
-      setSaving(false);
+    
+    // Clear existing timeout
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current);
     }
+
+    setSaving(true);
+    
+    // Debounce the save operation
+    saveTimeoutRef.current = setTimeout(async () => {
+      try {
+        const { error } = await supabase
+          .from('notes')
+          .update({
+            ...updates,
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', id);
+
+        if (error) throw error;
+        setSaving(false);
+      } catch (error) {
+        toast.error('Failed to save note');
+        setSaving(false);
+      }
+    }, 1000);
   };
 
   const handleDeleteNote = async (id: string) => {
-    if (!projectId) return;
     try {
-      await deleteDoc(doc(db, 'projects', projectId, 'notes', id));
+      const { error } = await supabase
+        .from('notes')
+        .delete()
+        .eq('id', id);
+
+      if (error) throw error;
       if (selectedNote?.id === id) setSelectedNote(null);
       toast.success('Note deleted');
     } catch (error) {
@@ -138,7 +188,7 @@ export default function Notes() {
                 )}
               </div>
               <p className="text-xs text-[var(--dark-grey)] line-clamp-1">{note.content.replace(/[#*`]/g, '')}</p>
-              <p className="text-[10px] text-[var(--dark-grey)] mt-2">{note.updatedAt ? formatDate(note.updatedAt.toDate()) : 'Recently'}</p>
+              <p className="text-[10px] text-[var(--dark-grey)] mt-2">{note.updated_at ? formatDate(new Date(note.updated_at)) : 'Recently'}</p>
             </button>
           ))}
           {filteredNotes.length === 0 && !loading && (

@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { db } from '../firebase';
-import { doc, getDoc, updateDoc, deleteDoc, collection, getDocs, query, where } from 'firebase/firestore';
+import { supabase } from '../lib/supabase';
 import { motion } from 'motion/react';
 import { 
   Settings, 
@@ -18,7 +17,6 @@ import {
   Loader2
 } from 'lucide-react';
 import { toast } from 'sonner';
-import { setDoc, serverTimestamp } from 'firebase/firestore';
 import { cn } from '../lib/utils';
 
 export default function ProjectSettings() {
@@ -43,11 +41,9 @@ export default function ProjectSettings() {
   useEffect(() => {
     const fetchProject = async () => {
       if (!projectId) return;
-      const projectRef = doc(db, 'projects', projectId);
-      const snap = await getDoc(projectRef);
-      if (snap.exists()) {
-        const data = snap.data();
-        setProject({ id: snap.id, ...data });
+      const { data } = await supabase.from('projects').select('*').eq('id', projectId).single();
+      if (data) {
+        setProject(data);
         setFormData({
           name: data.name || '',
           description: data.description || '',
@@ -66,11 +62,15 @@ export default function ProjectSettings() {
     if (!projectId) return;
     setSaving(true);
     try {
-      const projectRef = doc(db, 'projects', projectId);
-      await updateDoc(projectRef, {
-        ...formData,
-        updatedAt: new Date()
-      });
+      const { error } = await supabase
+        .from('projects')
+        .update({
+          ...formData,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', projectId);
+
+      if (error) throw error;
       toast.success('Project settings updated successfully');
     } catch (err) {
       console.error(err);
@@ -85,16 +85,19 @@ export default function ProjectSettings() {
     setInviting(true);
     try {
       const token = Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
-      const inviteRef = doc(db, 'project_invites', token);
       
-      await setDoc(inviteRef, {
-        projectId,
-        projectName: project.name,
-        role: 'client',
-        email: formData.client_email,
-        accepted: false,
-        createdAt: serverTimestamp()
-      });
+      const { error } = await supabase
+        .from('project_invites')
+        .insert([{
+          id: token,
+          project_id: projectId,
+          project_name: project.name,
+          role: 'client',
+          email: formData.client_email,
+          accepted: false
+        }]);
+
+      if (error) throw error;
 
       const link = `${window.location.origin}/accept-invite?token=${token}`;
       setInviteLink(link);
@@ -115,10 +118,8 @@ export default function ProjectSettings() {
   const handleDelete = async () => {
     if (!projectId || deleteInput !== project?.name) return;
     try {
-      // 1. Delete all sub-collections (bugs, requests, vault, files, notes, docs)
-      // Note: In a real app, you'd use a Cloud Function or a recursive delete.
-      // For this demo, we'll just delete the project document.
-      await deleteDoc(doc(db, 'projects', projectId));
+      const { error } = await supabase.from('projects').delete().eq('id', projectId);
+      if (error) throw error;
       toast.success('Project deleted successfully');
       navigate('/projects');
     } catch (err) {

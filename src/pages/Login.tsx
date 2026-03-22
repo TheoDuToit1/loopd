@@ -1,14 +1,6 @@
 import { useState } from 'react';
-import { auth, db } from '../firebase';
-import { 
-  signInWithPopup, 
-  GoogleAuthProvider, 
-  createUserWithEmailAndPassword, 
-  signInWithEmailAndPassword,
-  updateProfile
-} from 'firebase/auth';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
-import { motion, AnimatePresence } from 'motion/react';
+import { supabase } from '../lib/supabase';
+import { motion } from 'motion/react';
 import { LayoutDashboard, Mail, Lock, User, ArrowRight, Building2, Terminal } from 'lucide-react';
 import { toast } from 'sonner';
 import { useNavigate, useSearchParams, Link } from 'react-router-dom';
@@ -28,26 +20,13 @@ export default function Login({ isRegister = false }: { isRegister?: boolean }) 
   const handleGoogleLogin = async () => {
     setLoading(true);
     try {
-      const provider = new GoogleAuthProvider();
-      const result = await signInWithPopup(auth, provider);
-      const user = result.user;
-
-      const profileRef = doc(db, 'profiles', user.uid);
-      const profileSnap = await getDoc(profileRef);
-      
-      if (!profileSnap.exists()) {
-        await setDoc(profileRef, {
-          uid: user.uid,
-          displayName: user.displayName || 'Anonymous',
-          email: user.email || '',
-          role: role, // Use the selected role
-          theme: 'dark',
-          createdAt: new Date()
-        });
-      }
-
-      toast.success(isRegister ? 'Registered successfully' : 'Logged in successfully');
-      navigate(inviteToken ? `/accept-invite?token=${inviteToken}` : '/');
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo: `${window.location.origin}${inviteToken ? `/accept-invite?token=${inviteToken}` : '/'}`
+        }
+      });
+      if (error) throw error;
     } catch (error: any) {
       console.error(error);
       toast.error(error.message || 'Failed to authenticate');
@@ -60,26 +39,50 @@ export default function Login({ isRegister = false }: { isRegister?: boolean }) 
     e.preventDefault();
     setLoading(true);
     try {
-      let user;
       if (isRegister) {
-        const result = await createUserWithEmailAndPassword(auth, email, password);
-        user = result.user;
-        await updateProfile(user, { displayName });
-        
-        await setDoc(doc(db, 'profiles', user.uid), {
-          uid: user.uid,
-          displayName,
+        const { data, error } = await supabase.auth.signUp({
           email,
-          role,
-          theme: 'dark',
-          createdAt: new Date()
+          password,
+          options: {
+            data: {
+              display_name: displayName,
+              role: role
+            }
+          }
         });
+        
+        if (error) throw error;
+        
+        if (data.user) {
+          // Create profile manually if trigger isn't set up
+          const { error: profileError } = await supabase
+            .from('profiles')
+            .insert([
+              {
+                id: data.user.id,
+                display_name: displayName,
+                email: email,
+                role: role,
+                theme: 'dark'
+              }
+            ]);
+          
+          if (profileError) {
+            console.error('Error creating profile:', profileError);
+            // We don't throw here because the user is still created
+          }
+        }
+        
+        toast.success('Account created! Please check your email for verification.');
       } else {
-        const result = await signInWithEmailAndPassword(auth, email, password);
-        user = result.user;
+        const { error } = await supabase.auth.signInWithPassword({
+          email,
+          password
+        });
+        if (error) throw error;
+        toast.success('Welcome back!');
       }
 
-      toast.success(isRegister ? 'Account created!' : 'Welcome back!');
       navigate(inviteToken ? `/accept-invite?token=${inviteToken}` : '/');
     } catch (error: any) {
       toast.error(error.message || 'Authentication failed');

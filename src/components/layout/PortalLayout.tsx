@@ -9,8 +9,7 @@ import {
   MessageSquare,
   ChevronRight
 } from 'lucide-react';
-import { auth } from '../../firebase';
-import { signOut } from 'firebase/auth';
+import { supabase } from '../../lib/supabase';
 import { cn } from '../../lib/utils';
 import { useTheme, hexToRgb, darkenColor } from '../../contexts/ThemeContext';
 
@@ -21,7 +20,7 @@ export default function PortalLayout() {
   const { accentColor } = useTheme();
 
   const handleLogout = async () => {
-    await signOut(auth);
+    await supabase.auth.signOut();
     navigate('/');
   };
 

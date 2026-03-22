@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react';
-import { db } from '../firebase';
-import { collection, query, getDocs, orderBy, onSnapshot, doc, setDoc, serverTimestamp } from 'firebase/firestore';
+import { supabase } from '../lib/supabase';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Users, 
@@ -36,20 +35,53 @@ export default function Clients() {
   const [inviteLink, setInviteLink] = useState('');
 
   useEffect(() => {
-    const q = query(collection(db, 'profiles'), orderBy('displayName', 'asc'));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      setClients(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
-      setLoading(false);
-    });
-
-    const fetchProjects = async () => {
-      const pSnap = await getDocs(collection(db, 'projects'));
-      setProjects(pSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
-    };
+    fetchClients();
     fetchProjects();
 
-    return () => unsubscribe();
+    const channel = supabase
+      .channel('public:profiles_clients')
+      .on('postgres_changes', { 
+        event: '*', 
+        schema: 'public', 
+        table: 'profiles',
+        filter: 'role=eq.client'
+      }, () => {
+        fetchClients();
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, []);
+
+  const fetchClients = async () => {
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('role', 'client')
+      .order('full_name', { ascending: true });
+
+    if (error) {
+      toast.error('Failed to fetch clients');
+    } else {
+      setClients(data || []);
+    }
+    setLoading(false);
+  };
+
+  const fetchProjects = async () => {
+    const { data, error } = await supabase
+      .from('projects')
+      .select('*')
+      .order('name', { ascending: true });
+
+    if (error) {
+      toast.error('Failed to fetch projects');
+    } else {
+      setProjects(data || []);
+    }
+  };
 
   const handleInvite = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -60,19 +92,22 @@ export default function Clients() {
     setInviting(true);
     try {
       const token = Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
-      const inviteRef = doc(db, 'project_invites', token);
       
       const project = projects.find(p => p.id === selectedProjectId);
 
-      await setDoc(inviteRef, {
-        projectId: selectedProjectId,
-        projectName: project?.name || 'Unknown Project',
-        role: 'client',
-        email: inviteEmail,
-        clientName: inviteName,
-        accepted: false,
-        createdAt: serverTimestamp()
-      });
+      const { error } = await supabase
+        .from('project_invites')
+        .insert([{
+          token,
+          project_id: selectedProjectId,
+          project_name: project?.name || 'Unknown Project',
+          role: 'client',
+          email: inviteEmail,
+          client_name: inviteName,
+          accepted: false
+        }]);
+
+      if (error) throw error;
 
       const link = `${window.location.origin}/accept-invite?token=${token}`;
       setInviteLink(link);
@@ -91,7 +126,7 @@ export default function Clients() {
   };
 
   const filteredClients = clients.filter(c => 
-    c.displayName?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    c.full_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
     c.email?.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
@@ -150,11 +185,11 @@ export default function Clients() {
 
             <div className="flex items-center gap-4 mb-6">
               <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-emerald-500 to-teal-500 flex items-center justify-center text-2xl font-bold text-white shadow-xl">
-                {client.displayName.charAt(0)}
+                {client.full_name?.charAt(0) || 'U'}
               </div>
               <div>
                 <h3 className="text-lg font-bold text-white group-hover:text-[#4F46E5] transition-colors">
-                  {client.displayName}
+                  {client.full_name}
                 </h3>
                 <div className="flex items-center gap-1.5 text-xs text-[var(--dark-grey)]">
                   <Mail size={12} />

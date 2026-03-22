@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
-import { db, auth } from '../firebase';
-import { collection, query, onSnapshot, addDoc, serverTimestamp, deleteDoc, doc } from 'firebase/firestore';
+import { supabase } from '../lib/supabase';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Plus, 
@@ -33,30 +32,61 @@ export default function Vault() {
   useEffect(() => {
     if (!projectId) return;
 
-    const q = query(collection(db, 'projects', projectId, 'vault'));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const credsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setCredentials(credsData);
-      setLoading(false);
-    });
+    fetchCredentials();
 
-    return () => unsubscribe();
+    const channel = supabase
+      .channel(`vault_${projectId}`)
+      .on('postgres_changes', { 
+        event: '*', 
+        schema: 'public', 
+        table: 'vault',
+        filter: `project_id=eq.${projectId}`
+      }, () => {
+        fetchCredentials();
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, [projectId]);
+
+  const fetchCredentials = async () => {
+    if (!projectId) return;
+    const { data, error } = await supabase
+      .from('vault')
+      .select('*')
+      .eq('project_id', projectId)
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      toast.error('Failed to fetch credentials');
+    } else {
+      setCredentials(data || []);
+    }
+    setLoading(false);
+  };
 
   const handleCreateCredential = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!auth.currentUser || !projectId) return;
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user || !projectId) return;
 
     try {
       // Encrypt the value before storing
       const encryptedValue = CryptoJS.AES.encrypt(newCredential.value, ENCRYPTION_KEY).toString();
 
-      await addDoc(collection(db, 'projects', projectId, 'vault'), {
-        label: newCredential.label,
-        type: newCredential.type,
-        value_encrypted: encryptedValue,
-        createdAt: serverTimestamp(),
-      });
+      const { error } = await supabase
+        .from('vault')
+        .insert([{
+          label: newCredential.label,
+          type: newCredential.type,
+          value_encrypted: encryptedValue,
+          project_id: projectId
+        }]);
+
+      if (error) throw error;
+
       setShowNewModal(false);
       setNewCredential({ label: '', value: '', type: 'API Key' });
       toast.success('Credential added to vault');
@@ -105,9 +135,13 @@ export default function Vault() {
   };
 
   const handleDelete = async (id: string) => {
-    if (!projectId) return;
     try {
-      await deleteDoc(doc(db, 'projects', projectId, 'vault', id));
+      const { error } = await supabase
+        .from('vault')
+        .delete()
+        .eq('id', id);
+
+      if (error) throw error;
       toast.success('Credential deleted');
     } catch (error) {
       toast.error('Failed to delete credential');
