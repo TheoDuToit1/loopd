@@ -1,0 +1,86 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  
+  --color-looopd-navy: #0F172A;
+  --color-looopd-indigo: var(--accent-color, #4F46E5);
+  --color-looopd-violet: #7C3AED;
+  --color-looopd-teal: #0D9488;
+}
+
+:root {
+  --accent-color: #4F46E5;
+  --accent-color-hover: #4338CA;
+  --accent-color-glow: rgba(79, 70, 229, 0.2);
+  
+  --poppins: 'Poppins', sans-serif;
+  --lato: 'Lato', sans-serif;
+  --light: #F9F9F9;
+  --blue: #3C91E6;
+  --light-blue: #CFE8FF;
+  --grey: #eee;
+  --dark-grey: #AAAAAA;
+  --dark: #342E37;
+  --red: #DB504A;
+  --yellow: #FFCE26;
+  --light-yellow: #FFF2C6;
+  --orange: #FD7238;
+  --light-orange: #FFE0D3;
+}
+
+.dark {
+  --light: #0C0C1E;
+  --grey: #060714;
+  --dark: #FBFBFB;
+}
+
+@layer base {
+  body {
+    @apply bg-[var(--grey)] text-[var(--dark)] font-sans antialiased;
+  }
+}
+
+@layer components {
+  .status {
+    @apply px-3 py-1 rounded-full text-xs font-medium text-white;
+  }
+  .status.completed { background-color: var(--blue); }
+  .status.process { background-color: var(--yellow); }
+  .status.pending { background-color: var(--orange); }
+
+  .severity-dot {
+    @apply w-3 h-3 rounded-full inline-block mr-2;
+  }
+  .severity-dot.low { background-color: var(--blue); }
+  .severity-dot.medium { background-color: var(--yellow); }
+  .severity-dot.high { background-color: var(--orange); }
+  .severity-dot.critical { 
+    background-color: var(--red);
+    @apply animate-pulse;
+  }
+
+  .priority-badge {
+    @apply px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider text-white;
+  }
+  .priority-badge.low { background-color: var(--dark-grey); }
+  .priority-badge.medium { background-color: var(--blue); }
+  .priority-badge.high { background-color: var(--orange); }
+  .priority-badge.urgent { background-color: var(--red); }
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--dark-grey);
+  border-radius: 10px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--looopd-indigo);
+}

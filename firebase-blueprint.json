@@ -1,0 +1,78 @@
+{
+  "entities": {
+    "profiles": {
+      "title": "User Profile",
+      "description": "Extended user information for authentication and personalization.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Firebase Auth UID" },
+        "displayName": { "type": "string", "description": "Full name" },
+        "email": { "type": "string", "format": "email" },
+        "role": { "type": "string", "enum": ["owner", "developer", "project_manager", "client", "viewer"] },
+        "theme": { "type": "string", "enum": ["light", "dark"] }
+      },
+      "required": ["uid", "displayName", "email", "role"]
+    },
+    "projects": {
+      "title": "Project",
+      "description": "Core project record.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "status": { "type": "string", "enum": ["planning", "development", "testing", "deployment", "completed"] },
+        "ownerId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "status", "ownerId", "createdAt"]
+    },
+    "project_users": {
+      "title": "Project User Mapping",
+      "description": "Maps users to projects with specific roles.",
+      "type": "object",
+      "properties": {
+        "projectId": { "type": "string" },
+        "userId": { "type": "string" },
+        "role": { "type": "string", "enum": ["owner", "developer", "project_manager", "client", "viewer"] }
+      },
+      "required": ["projectId", "userId", "role"]
+    },
+    "bugs": {
+      "title": "Bug Report",
+      "description": "Bug tracking record.",
+      "type": "object",
+      "properties": {
+        "projectId": { "type": "string" },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "status": { "type": "string", "enum": ["open", "investigating", "fixing", "testing", "resolved"] },
+        "severity": { "type": "string", "enum": ["low", "medium", "high", "critical"] },
+        "reporterId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["projectId", "title", "status", "severity", "reporterId", "createdAt"]
+    },
+    "change_requests": {
+      "title": "Change Request",
+      "description": "Client request for changes.",
+      "type": "object",
+      "properties": {
+        "projectId": { "type": "string" },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "status": { "type": "string", "enum": ["submitted", "accepted", "in-progress", "testing", "completed"] },
+        "priority": { "type": "string", "enum": ["low", "medium", "high", "urgent"] },
+        "clientId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["projectId", "title", "status", "priority", "clientId", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/profiles/{uid}": { "schema": "profiles", "description": "User profiles" },
+    "/projects/{projectId}": { "schema": "projects", "description": "Project records" },
+    "/projects/{projectId}/users/{userId}": { "schema": "project_users", "description": "Project members" },
+    "/projects/{projectId}/bugs/{bugId}": { "schema": "bugs", "description": "Project bugs" },
+    "/projects/{projectId}/change_requests/{requestId}": { "schema": "change_requests", "description": "Project change requests" }
+  }
+}
